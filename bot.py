@@ -1,96 +1,127 @@
-from flask import Flask, request
 import telebot
+from flask import Flask, request
+import json
 import os
 
-API_TOKEN = ("8049094194:AAH_quTdGh7Yv33oy32KNYhuHYmCNvV8DIE")
+API_TOKEN = '8049094194:AAH_quTdGh7Yv33oy32KNYhuHYmCNvV8DIE'
+ADMIN_ID = 5259348480  # Replace with your Telegram ID
+
 bot = telebot.TeleBot(API_TOKEN)
 app = Flask(__name__)
 
-users = {}  # user_id: {ref, team, balance, name}
-REFERRAL_REWARD = 5
-waiting_for_name = set()  # Track users who are setting name
+DATA_FILE = "db.json"
 
+# Utils
+def load_data():
+    with open(DATA_FILE, "r") as f:
+        return json.load(f)
+
+def save_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+# Start command
 @bot.message_handler(commands=['start'])
 def start(message):
-    user_id = message.from_user.id
-    args = message.text.split()
+    data = load_data()
+    user_id = str(message.chat.id)
 
-    if user_id not in users:
-        referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
-        users[user_id] = {
-            "ref": referrer_id,
-            "team": [],
+    if user_id not in data['users']:
+        data['users'][user_id] = {
+            "name": message.from_user.first_name,
+            "ref_by": None,
             "balance": 0,
-            "name": "Not set"
+            "tasks_done": []
         }
+        save_data(data)
+    
+    bot.send_message(message.chat.id, f"🙏 Welcome {message.from_user.first_name}!\n\nUse /profile, /tasks, /balance")
 
-        if referrer_id and referrer_id in users and user_id != referrer_id:
-            users[referrer_id]["team"].append(user_id)
-            users[referrer_id]["balance"] += REFERRAL_REWARD
+# Profile update
+@bot.message_handler(commands=['profile'])
+def profile(message):
+    data = load_data()
+    user = data['users'][str(message.chat.id)]
+    msg = f"👤 Name: {user['name']}\n💰 Balance: ₹{user['balance']}"
+    bot.send_message(message.chat.id, msg)
 
-    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("👤 Profile", "💰 My Balance")
-    markup.row("🔗 My Referral Link", "👥 My Team")
-    markup.row("📝 Set Name")
-    bot.send_message(user_id, "🎉 Welcome to the Referral Bot!", reply_markup=markup)
+# Balance command
+@bot.message_handler(commands=['balance'])
+def balance(message):
+    data = load_data()
+    balance = data['users'][str(message.chat.id)]["balance"]
+    bot.send_message(message.chat.id, f"💸 Your Balance: ₹{balance}")
 
-@bot.message_handler(func=lambda message: True)
-def handle_buttons(message):
-    user_id = message.from_user.id
-    user = users.get(user_id)
+# Tasks list
+@bot.message_handler(commands=['tasks'])
+def tasks(message):
+    data = load_data()
+    tasks = data['tasks']
+    if not tasks:
+        bot.send_message(message.chat.id, "📭 No tasks for today.")
+    else:
+        text = "📝 Today's Tasks:\n"
+        for idx, task in enumerate(tasks, 1):
+            text += f"{idx}. {task['text']} (₹{task['reward']})\n"
+        text += "\nReply with /done <task_number> to mark it done"
+        bot.send_message(message.chat.id, text)
 
-    if not user:
-        bot.reply_to(message, "कृपया /start ने सुरुवात करा.")
+# Mark task done
+@bot.message_handler(commands=['done'])
+def mark_done(message):
+    args = message.text.split()
+    if len(args) < 2:
+        return bot.reply_to(message, "❗Usage: /done <task_number>")
+    
+    try:
+        task_num = int(args[1]) - 1
+        data = load_data()
+        user = data['users'][str(message.chat.id)]
+
+        if task_num < 0 or task_num >= len(data['tasks']):
+            return bot.reply_to(message, "❌ Invalid task number.")
+
+        if task_num in user['tasks_done']:
+            return bot.reply_to(message, "✅ Already marked as done.")
+
+        reward = data['tasks'][task_num]['reward']
+        user['balance'] += reward
+        user['tasks_done'].append(task_num)
+        save_data(data)
+
+        bot.reply_to(message, f"✅ Task completed! ₹{reward} added to your balance.")
+
+    except Exception as e:
+        bot.reply_to(message, "❌ Error occurred. Try again.")
+
+# Admin: Add Task
+@bot.message_handler(commands=['addtask'])
+def add_task(message):
+    if message.chat.id != ADMIN_ID:
         return
 
-    if message.text == "👤 Profile":
-        ref = user.get("ref", "None")
-        team_count = len(user.get("team", []))
-        name = user.get("name", "Not set")
-        msg = (
-            f"👤 *Your Profile:*\n"
-            f"🆔 ID: `{user_id}`\n"
-            f"📛 Name: `{name}`\n"
-            f"👑 Referred By: `{ref}`\n"
-            f"👥 Team Members: `{team_count}`"
-        )
-        bot.send_message(user_id, msg, parse_mode="Markdown")
+    text = message.text.replace('/addtask', '').strip()
+    if '|' not in text:
+        return bot.reply_to(message, "❗Usage: /addtask Task Text | 10")
 
-    elif message.text == "💰 My Balance":
-        balance = user.get("balance", 0)
-        bot.send_message(user_id, f"💰 Your Current Balance: ₹{balance}")
+    task_text, reward = text.split('|')
+    data = load_data()
+    data['tasks'].append({"text": task_text.strip(), "reward": int(reward.strip())})
+    save_data(data)
 
-    elif message.text == "🔗 My Referral Link":
-        bot.send_message(user_id, f"🔗 Share this link:\nhttps://t.me/YOUR_BOT_USERNAME?start={user_id}")
+    bot.send_message(message.chat.id, "✅ Task added.")
 
-    elif message.text == "👥 My Team":
-        team = user.get("team", [])
-        if team:
-            msg = f"👥 Your Team ({len(team)}):\n" + "\n".join([f"- `{uid}`" for uid in team])
-        else:
-            msg = "🙁 You don't have any team members yet."
-        bot.send_message(user_id, msg, parse_mode="Markdown")
-
-    elif message.text == "📝 Set Name":
-        waiting_for_name.add(user_id)
-        bot.send_message(user_id, "तुमचं नवीन नाव पाठवा:")
-
-    elif user_id in waiting_for_name:
-        users[user_id]["name"] = message.text.strip()
-        waiting_for_name.remove(user_id)
-        bot.send_message(user_id, f"✅ तुमचं नाव *{message.text.strip()}* सेट करण्यात आलं.", parse_mode="Markdown")
-
-# Webhook
-@app.route('/' + API_TOKEN, methods=['POST'])
-def receive_update():
+# Flask Webhook
+@app.route(f"/{API_TOKEN}", methods=["POST"])
+def webhook():
     bot.process_new_updates([telebot.types.Update.de_json(request.stream.read().decode("utf-8"))])
     return "OK", 200
 
-@app.route('/')
-def set_webhook():
-    bot.remove_webhook()
-    bot.set_webhook(url=f"{os.environ.get('RENDER_URL')}/{API_TOKEN}")
-    return "Webhook सेट झाला!", 200
+@app.route("/", methods=["GET"])
+def index():
+    return "Bot is live"
 
-if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+if __name__ == "__main__":
+    bot.remove_webhook()
+    bot.set_webhook(url="https://YOUR-RENDER-URL.onrender.com/" + API_TOKEN)
+    app.run(host="0.0.0.0", port=10000)
