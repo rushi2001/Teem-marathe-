@@ -7,7 +7,7 @@ from telegram.ext import (
 )
 
 ADMIN_ID = 5596196601
-BOT_TOKEN = os.environ.get("8049094194:AAH_quTdGh7Yv33oy32KNYhuHYmCNvV8DIE")
+BOT_TOKEN = ("8049094194:AAH_quTdGh7Yv33oy32KNYhuHYmCNvV8DIE")
 
 users = {}
 
