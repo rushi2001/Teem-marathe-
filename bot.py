@@ -6,11 +6,9 @@ API_TOKEN = ("8049094194:AAH_quTdGh7Yv33oy32KNYhuHYmCNvV8DIE")
 bot = telebot.TeleBot(API_TOKEN)
 app = Flask(__name__)
 
-# In-memory database (for demo/testing)
-users = {}  # Format: { user_id: {"ref": referrer_id, "team": [], "balance": 0} }
-
-# Constants
-REFERRAL_REWARD = 5  # ₹5 per refer
+users = {}  # user_id: {ref, team, balance, name}
+REFERRAL_REWARD = 5
+waiting_for_name = set()  # Track users who are setting name
 
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -19,7 +17,12 @@ def start(message):
 
     if user_id not in users:
         referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
-        users[user_id] = {"ref": referrer_id, "team": [], "balance": 0}
+        users[user_id] = {
+            "ref": referrer_id,
+            "team": [],
+            "balance": 0,
+            "name": "Not set"
+        }
 
         if referrer_id and referrer_id in users and user_id != referrer_id:
             users[referrer_id]["team"].append(user_id)
@@ -28,6 +31,7 @@ def start(message):
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("👤 Profile", "💰 My Balance")
     markup.row("🔗 My Referral Link", "👥 My Team")
+    markup.row("📝 Set Name")
     bot.send_message(user_id, "🎉 Welcome to the Referral Bot!", reply_markup=markup)
 
 @bot.message_handler(func=lambda message: True)
@@ -42,9 +46,11 @@ def handle_buttons(message):
     if message.text == "👤 Profile":
         ref = user.get("ref", "None")
         team_count = len(user.get("team", []))
+        name = user.get("name", "Not set")
         msg = (
             f"👤 *Your Profile:*\n"
             f"🆔 ID: `{user_id}`\n"
+            f"📛 Name: `{name}`\n"
             f"👑 Referred By: `{ref}`\n"
             f"👥 Team Members: `{team_count}`"
         )
@@ -65,7 +71,16 @@ def handle_buttons(message):
             msg = "🙁 You don't have any team members yet."
         bot.send_message(user_id, msg, parse_mode="Markdown")
 
-# Webhook setup
+    elif message.text == "📝 Set Name":
+        waiting_for_name.add(user_id)
+        bot.send_message(user_id, "तुमचं नवीन नाव पाठवा:")
+
+    elif user_id in waiting_for_name:
+        users[user_id]["name"] = message.text.strip()
+        waiting_for_name.remove(user_id)
+        bot.send_message(user_id, f"✅ तुमचं नाव *{message.text.strip()}* सेट करण्यात आलं.", parse_mode="Markdown")
+
+# Webhook
 @app.route('/' + API_TOKEN, methods=['POST'])
 def receive_update():
     bot.process_new_updates([telebot.types.Update.de_json(request.stream.read().decode("utf-8"))])
