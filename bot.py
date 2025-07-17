@@ -94,7 +94,7 @@ async def approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ User not found.")
 
 def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = ApplicationBuilder().token(8049094194:AAH_quTdGh7Yv33oy32KNYhuHYmCNvV8DIE).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("approve", approve))
     app.add_handler(CallbackQueryHandler(button))
