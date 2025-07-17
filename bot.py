@@ -1,64 +1,113 @@
-import telebot
-from telebot.types import ReplyKeyboardMarkup
 import json
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Updater, CommandHandler, CallbackContext, MessageHandler, Filters, CallbackQueryHandler
 
-TOKEN = '8049094194:AAH_quTdGh7Yv33oy32KNYhuHYmCNvV8DIE'
-bot = telebot.TeleBot(TOKEN)
+ADMIN_ID = 5596196601
 
+users = {}
+
+# Load users if exists
 try:
     with open("users.json", "r") as f:
         users = json.load(f)
-except:
+except FileNotFoundError:
     users = {}
 
 def save_users():
     with open("users.json", "w") as f:
-        json.dump(users, f, indent=2)
+        json.dump(users, f)
 
-def main_menu():
-    markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("📜 My Profile", "👥 My Team")
-    markup.row("💸 My Earnings", "📤 Invite Friends")
-    markup.row("🎯 Daily Task", "🛍 Buy Course")
-    return markup
+def start(update: Update, context: CallbackContext):
+    user = update.effective_user
+    user_id = str(user.id)
 
-@bot.message_handler(commands=['start'])
-def start(message):
-    uid = str(message.from_user.id)
-    name = message.from_user.first_name
-    ref = message.text.split(" ")[1] if len(message.text.split()) > 1 else None
+    if user_id not in users:
+        users[user_id] = {"balance": 0, "tasks": [], "referrer": None}
+        if context.args:
+            ref_id = context.args[0]
+            if ref_id != user_id and ref_id in users:
+                users[user_id]["referrer"] = ref_id
+                users[ref_id]["balance"] += 10
+    save_users()
 
-    if uid not in users:
-        users[uid] = {"name": name, "ref_by": ref, "refs": [], "earnings": 0}
-        if ref and ref in users:
-            users[ref]["refs"].append(uid)
-            users[ref]["earnings"] += 20
+    keyboard = [
+        [InlineKeyboardButton("🎯 Daily Task", callback_data="daily_task")],
+        [InlineKeyboardButton("💰 Balance", callback_data="balance")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    update.message.reply_text("🔥 Welcome to Teem मराठे 🔥", reply_markup=reply_markup)
+
+def button(update: Update, context: CallbackContext):
+    query = update.callback_query
+    user_id = str(query.from_user.id)
+    query.answer()
+
+    if query.data == "daily_task":
+        context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text="🔗 Send today's Instagram or YouTube video link to like or watch."
+        )
+        users[user_id]["awaiting_task"] = True
         save_users()
 
-    bot.send_message(message.chat.id, f"🏹 जय शिवराय, {name}! तू 'Teem मराठे' मध्ये सहभागी झाला आहेस!", reply_markup=main_menu())
+    elif query.data == "balance":
+        bal = users.get(user_id, {}).get("balance", 0)
+        context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=f"💰 Your balance: ₹{bal}"
+        )
 
-@bot.message_handler(func=lambda m: True)
-def handle_all(message):
-    uid = str(message.from_user.id)
-    if message.text == "📜 My Profile":
-        bot.send_message(message.chat.id, f"👤 Name: {users[uid]['name']}\n💸 Earnings: ₹{users[uid]['earnings']}\n👥 Team: {len(users[uid]['refs'])}")
-    elif message.text == "👥 My Team":
-        team = users[uid]['refs']
-        if team:
-            team_list = "\n".join([users[i]['name'] for i in team if i in users])
-            bot.send_message(message.chat.id, f"👥 Team Members:\n{team_list}")
-        else:
-            bot.send_message(message.chat.id, "कोणताही सदस्य अजूनपर्यंत जोडलेला नाही.")
-    elif message.text == "💸 My Earnings":
-        bot.send_message(message.chat.id, f"💰 एकूण उत्पन्न: ₹{users[uid]['earnings']}")
-    elif message.text == "📤 Invite Friends":
-        ref_link = f"https://t.me/YOUR_BOT_USERNAME?start={uid}"
-        bot.send_message(message.chat.id, f"📣 तुमचा Referral Link:\n{ref_link}")
-    elif message.text == "🎯 Daily Task":
-        bot.send_message(message.chat.id, "📌 आजचा टास्क: \n\n📝 'Discipline is the bridge between goals and achievement.' हा quote शेअर करा.")
-    elif message.text == "🛍 Buy Course":
-        bot.send_message(message.chat.id, "💡 PixleLab Course ₹299 ला उपलब्ध!\n🪙 Pay: 7448029679@ybl\n🖼️ Screenshot admin ला पाठवा.")
+def handle_message(update: Update, context: CallbackContext):
+    user_id = str(update.effective_user.id)
+    message = update.message.text
+
+    if users.get(user_id, {}).get("awaiting_task"):
+        task_text = message
+        users[user_id]["tasks"].append(task_text)
+        users[user_id]["awaiting_task"] = False
+        save_users()
+        context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"🆕 Task from user {user_id}:\n\n{task_text}\n\nUse /approve {user_id} to give ₹10"
+        )
+        update.message.reply_text("✅ Task submitted! Wait for admin approval.")
     else:
-        bot.send_message(message.chat.id, "कृपया योग्य पर्याय निवडा.", reply_markup=main_menu())
+        update.message.reply_text("❗ Please use the buttons to interact.")
 
-bot.polling()
+def approve(update: Update, context: CallbackContext):
+    user_id = str(update.effective_user.id)
+    if user_id != str(ADMIN_ID):
+        update.message.reply_text("❌ You are not admin.")
+        return
+
+    args = context.args
+    if not args:
+        update.message.reply_text("Usage: /approve <user_id>")
+        return
+
+    target_id = args[0]
+    if target_id in users:
+        users[target_id]["balance"] += 10
+        save_users()
+        context.bot.send_message(
+            chat_id=int(target_id),
+            text="✅ Your task is approved. ₹10 added to your account."
+        )
+        update.message.reply_text(f"✅ Approved user {target_id}.")
+    else:
+        update.message.reply_text("❌ User not found.")
+
+def main():
+    updater = Updater("8049094194:AAH_quTdGh7Yv33oy32KNYhuHYmCNvV8DIE", use_context=True)
+    dp = updater.dispatcher
+
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("approve", approve))
+    dp.add_handler(CallbackQueryHandler(button))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+
+    updater.start_polling()
+    updater.idle()
+
+if __name__ == '__main__':
+    main()
