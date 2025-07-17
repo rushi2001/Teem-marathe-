@@ -1,93 +1,74 @@
+from telebot import TeleBot
 import json
 import os
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler,
-    ContextTypes, MessageHandler,
-    filters, CallbackQueryHandler
-)
 
-# ⛑️ Admin Telegram ID टाका (तुझा)
-ADMIN_ID = 5596196601
+bot = TeleBot("8049094194:AAH_quTdGh7Yv33oy32KNYhuHYmCNvV8DIE")
 
-# 📂 users.json मध्ये user add/save करणं
-def save_user(user_id):
-    try:
-        with open("users.json", "r") as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        data = {}
+# User data फाईल
+if not os.path.exists("users.json"):
+    with open("users.json", "w") as f:
+        json.dump({}, f)
 
-    if str(user_id) not in data:
-        data[str(user_id)] = {"tasks_done": 0}
-        with open("users.json", "w") as f:
-            json.dump(data, f, indent=4)
-
-# 📥 /start command
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    save_user(user_id)
-    await update.message.reply_text("नमस्कार! तुम्ही बोट वापरायला सुरुवात केली आहे.")
-
-# 🛡️ /admin command (Admin Panel UI)
-async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⛔️ तुम्ही Admin नाही!")
-        return
-
+def load_users():
     with open("users.json", "r") as f:
-        data = json.load(f)
+        return json.load(f)
 
-    total_users = len(data)
-    text = f"👨‍💼 Admin Panel:\n\n👥 Total Users: {total_users}"
+def save_users(data):
+    with open("users.json", "w") as f:
+        json.dump(data, f, indent=2)
 
-    keyboard = [
-        [InlineKeyboardButton("📢 Broadcast", callback_data="broadcast")]
-    ]
+# Start Command
+@bot.message_handler(commands=['start'])
+def start(message):
+    user_id = str(message.from_user.id)
+    username = message.from_user.username
+    args = message.text.split()
+    referred_by = args[1] if len(args) > 1 else None
 
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(text, reply_markup=reply_markup)
+    users = load_users()
+    if user_id not in users:
+        users[user_id] = {
+            "username": username,
+            "points": 0,
+            "referred_by": referred_by,
+            "referrals": []
+        }
+        if referred_by and referred_by in users:
+            users[referred_by]["points"] += 10
+            users[referred_by]["referrals"].append(user_id)
 
-# 📢 Broadcast start
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+        save_users(users)
 
-    if query.data == "broadcast":
-        await query.message.reply_text("✍️ Broadcast साठी message टाका:")
-        context.user_data["broadcast_mode"] = True
+    bot.send_message(message.chat.id, f"नमस्कार {username or 'मित्रा'}! Motivational Akhada मध्ये स्वागत आहे.")
 
-# 📨 Broadcast message पाठवणं
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get("broadcast_mode") and update.effective_user.id == ADMIN_ID:
-        message = update.message.text
-        context.user_data["broadcast_mode"] = False
+# Profile Command
+@bot.message_handler(commands=['profile'])
+def profile(message):
+    user_id = str(message.from_user.id)
+    users = load_users()
 
-        with open("users.json", "r") as f:
-            data = json.load(f)
+    if user_id in users:
+        user = users[user_id]
+        profile_text = f"""🧾 *तुझं प्रोफाइल*
+👤 Username: @{user['username']}
+💰 Points: {user['points']}
+👥 Referrals: {len(user['referrals'])}
+"""
+        bot.send_message(message.chat.id, profile_text, parse_mode="Markdown")
+    else:
+        bot.send_message(message.chat.id, "कृपया /start कमांड वापरा आधी.")
 
-        sent = 0
-        for user_id in data:
-            try:
-                await context.bot.send_message(chat_id=int(user_id), text=message)
-                sent += 1
-            except:
-                pass
-        await update.message.reply_text(f"📤 Broadcast पाठवला गेला {sent} users ना.")
+# Refer Command
+@bot.message_handler(commands=['refer'])
+def refer(message):
+    user_id = str(message.from_user.id)
+    users = load_users()
 
-# ✅ Bot run करणं
-def main():
-    BOT_TOKEN = ("8049094194:AAH_quTdGh7Yv33oy32KNYhuHYmCNvV8DIE")
+    if user_id in users:
+        referral_link = f"https://t.me/{bot.get_me().username}?start={user_id}"
+        bot.send_message(message.chat.id, f"🫂 आपला referral link:\n{referral_link}")
+    else:
+        bot.send_message(message.chat.id, "कृपया /start कमांड वापरा आधी.")
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("admin", admin))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
-
-    print("🤖 Bot started...")
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+# Polling सुरू करा
+bot.polling()
