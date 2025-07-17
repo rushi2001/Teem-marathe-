@@ -1,74 +1,61 @@
-from telebot import TeleBot
-import json
+from flask import Flask, request
+import telebot
 import os
 
-bot = TeleBot("8049094194:AAH_quTdGh7Yv33oy32KNYhuHYmCNvV8DIE")
+API_TOKEN = ("8049094194:AAH_quTdGh7Yv33oy32KNYhuHYmCNvV8DIE")
+bot = telebot.TeleBot(API_TOKEN)
+app = Flask(__name__)
 
-# User data फाईल
-if not os.path.exists("users.json"):
-    with open("users.json", "w") as f:
-        json.dump({}, f)
+# Temporary In-Memory Database (Use actual DB like MongoDB for production)
+users = {}  # Format: user_id: {"ref": referrer_id, "team": []}
 
-def load_users():
-    with open("users.json", "r") as f:
-        return json.load(f)
-
-def save_users(data):
-    with open("users.json", "w") as f:
-        json.dump(data, f, indent=2)
-
-# Start Command
+# Start command
 @bot.message_handler(commands=['start'])
 def start(message):
-    user_id = str(message.from_user.id)
-    username = message.from_user.username
+    user_id = message.from_user.id
     args = message.text.split()
-    referred_by = args[1] if len(args) > 1 else None
 
-    users = load_users()
     if user_id not in users:
-        users[user_id] = {
-            "username": username,
-            "points": 0,
-            "referred_by": referred_by,
-            "referrals": []
-        }
-        if referred_by and referred_by in users:
-            users[referred_by]["points"] += 10
-            users[referred_by]["referrals"].append(user_id)
+        referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
+        users[user_id] = {"ref": referrer_id, "team": []}
+        if referrer_id and referrer_id in users:
+            users[referrer_id]["team"].append(user_id)
 
-        save_users(users)
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row("👤 My ID", "🔗 My Referral Link")
+    markup.row("👥 My Team")
+    bot.send_message(user_id, "Welcome to the bot!", reply_markup=markup)
 
-    bot.send_message(message.chat.id, f"नमस्कार {username or 'मित्रा'}! Motivational Akhada मध्ये स्वागत आहे.")
+# Button handler
+@bot.message_handler(func=lambda message: True)
+def handle_buttons(message):
+    user_id = message.from_user.id
 
-# Profile Command
-@bot.message_handler(commands=['profile'])
-def profile(message):
-    user_id = str(message.from_user.id)
-    users = load_users()
+    if message.text == "👤 My ID":
+        bot.reply_to(message, f"Your ID: {user_id}")
 
-    if user_id in users:
-        user = users[user_id]
-        profile_text = f"""🧾 *तुझं प्रोफाइल*
-👤 Username: @{user['username']}
-💰 Points: {user['points']}
-👥 Referrals: {len(user['referrals'])}
-"""
-        bot.send_message(message.chat.id, profile_text, parse_mode="Markdown")
-    else:
-        bot.send_message(message.chat.id, "कृपया /start कमांड वापरा आधी.")
+    elif message.text == "🔗 My Referral Link":
+        bot.reply_to(message, f"Your link:\nhttps://t.me/YOUR_BOT_USERNAME?start={user_id}")
 
-# Refer Command
-@bot.message_handler(commands=['refer'])
-def refer(message):
-    user_id = str(message.from_user.id)
-    users = load_users()
+    elif message.text == "👥 My Team":
+        team = users.get(user_id, {}).get("team", [])
+        if team:
+            msg = f"👥 Your Team ({len(team)} members):\n" + "\n".join([f"- {uid}" for uid in team])
+        else:
+            msg = "😕 You don’t have any team members yet."
+        bot.reply_to(message, msg)
 
-    if user_id in users:
-        referral_link = f"https://t.me/{bot.get_me().username}?start={user_id}"
-        bot.send_message(message.chat.id, f"🫂 आपला referral link:\n{referral_link}")
-    else:
-        bot.send_message(message.chat.id, "कृपया /start कमांड वापरा आधी.")
+# Webhook receiver
+@app.route('/' + API_TOKEN, methods=['POST'])
+def getMessage():
+    bot.process_new_updates([telebot.types.Update.de_json(request.stream.read().decode("utf-8"))])
+    return "OK", 200
 
-# Polling सुरू करा
-bot.polling()
+@app.route('/')
+def webhook():
+    bot.remove_webhook()
+    bot.set_webhook(url=f"{os.environ.get('RENDER_URL')}/{API_TOKEN}")
+    return "Webhook Set!", 200
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
